@@ -73,11 +73,11 @@ lib.mkIf config.microvm.guest.enable {
     map (shares: {
       assertion = builtins.length shares == 1;
       message = ''
-        MicroVM ${hostName}: share socket "${(builtins.head shares).socket}" is used ${toString (builtins.length shares)} > 1 times.
+        MicroVM ${hostName}: share socket "${(builtins.head shares).server.socket}" is used ${toString (builtins.length shares)} > 1 times.
       '';
     }) (
       builtins.attrValues (
-        builtins.groupBy ({ socket, ... }: toString socket) (
+        builtins.groupBy ({ server, ... }: toString server.socket) (
           builtins.filter ({ proto, ... }: proto == "virtiofs")
             config.microvm.shares
         )
@@ -85,32 +85,24 @@ lib.mkIf config.microvm.guest.enable {
     )
     ++
     # check for virtiofs shares without socket
-    map ({ tag, socket, ... }: {
-      assertion = socket != null;
+    map ({ tag, server, ... }: {
+      assertion = server.socket != null;
       message = ''
-        MicroVM ${hostName}: virtiofs share with tag "${tag}" is missing a `socket` path.
+        MicroVM ${hostName}: virtiofs share with tag "${tag}" is missing a `server.socket` path.
       '';
     }) (
       builtins.filter ({ proto, ... }: proto == "virtiofs")
         config.microvm.shares
     )
     ++
-    # check for virtiofs shares where posixAcl conflicts with translate-uid/gid
-    # (--posix-acl and --translate-uid/--translate-gid are mutually exclusive in virtiofsd;
-    # --translate-uid/gid can come from either per-share extraArgs or global microvm.virtiofsd.extraArgs)
-    map ({ tag, posixAcl, extraArgs, ... }: {
-      assertion = !(posixAcl && (
-        lib.any (s: lib.hasInfix "--translate-uid" s || lib.hasInfix "--translate-gid" s)
-          (config.microvm.virtiofsd.extraArgs ++ extraArgs)
-      ));
+    # 9p is served by the hypervisor itself, so it always needs a source
+    map ({ tag, source, ... }: {
+      assertion = source != null;
       message = ''
-        MicroVM ${hostName}: virtiofs share "${tag}" has posixAcl=true but
-        extraArgs (per-share or global microvm.virtiofsd.extraArgs) contains
-        --translate-uid/--translate-gid, which conflict with --posix-acl.
-        Set posixAcl=false on this share to use UID/GID remapping.
+        MicroVM ${hostName}: 9p share with tag "${tag}" is missing a `source` path.
       '';
     }) (
-      builtins.filter ({ proto, ... }: proto == "virtiofs")
+      builtins.filter ({ proto, ... }: proto == "9p")
         config.microvm.shares
     )
     ++

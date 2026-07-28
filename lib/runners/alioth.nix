@@ -40,7 +40,7 @@ in {
       ]
       ++
       lib.optionals storeOnDisk [
-        "--blk" (lib.escapeShellArg "path=${storeDisk},readonly=true")
+        "--blk" (lib.escapeShellArg "file,path=${storeDisk},readonly=true")
       ]
       ++
       builtins.concatMap ({ image, serial, direct, readOnly, ... }:
@@ -52,17 +52,24 @@ in {
         ''
           [
             "--blk"
-            (lib.escapeShellArg "path=${image},readOnly=${
+            (lib.escapeShellArg "file,path=${image},readonly=${
               lib.boolToString readOnly
             }")
           ]
       ) volumes
       ++
-      builtins.concatMap ({ proto, socket, tag, ... }:
+      builtins.concatMap ({ proto, server, tag, dax, ... }:
         if proto == "virtiofs"
-        then [
-          "--fs" (lib.escapeShellArg "vu,socket=${socket},tag=${tag}")
-        ] else throw "9p shares not implemented for alioth"
+        then
+          # alioth sizes the window itself, so it has to be told.
+          lib.throwIf (dax.mode != "never" && dax.window == null)
+            "alioth needs dax.window when dax.mode is not never"
+          [
+            "--fs" (lib.escapeShellArg (
+              "vu,socket=${server.socket},tag=${tag}"
+              + lib.optionalString (dax.mode != "never") ",dax_window=${toString dax.window}"
+            ))
+          ] else throw "9p shares not implemented for alioth"
       ) shares
       ++
       builtins.concatMap ({ type, id, mac, ... }:

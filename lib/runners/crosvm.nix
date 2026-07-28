@@ -98,10 +98,14 @@ in {
         ]
       ) volumes
       ++
-      builtins.concatMap ({ proto, tag, source, socket, readOnly, ... }: {
-        "virtiofs" = [
-          "--vhost-user" "type=fs,socket=${socket}"
-        ];
+      builtins.concatMap ({ proto, tag, source, server, readOnly, dax, ... }: {
+        # crosvm asks the server for a window over GET_SHMEM_CONFIG, so there
+        # is nothing to pass and no size for a caller to choose here.
+        "virtiofs" = lib.throwIf (dax.window != null)
+          "crosvm takes the DAX window size from the server, not dax.window"
+          [
+            "--vhost-user" "type=fs,socket=${server.socket}"
+          ];
         "9p" = if readOnly then
           throw "Readonly 9p share is not supported"
         else [

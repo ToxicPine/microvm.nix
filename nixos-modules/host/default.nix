@@ -55,7 +55,7 @@ in
             builtins.foldl' (
               result: share:
               result
-              // lib.optionalAttrs (share.source != "/nix/store") {
+              // lib.optionalAttrs (share.source != null && share.source != "/nix/store") {
                 "${share.source}".d = {
                   # Only adjust permissions if directory doesn't exist
                   user = ":${user}";
@@ -115,7 +115,6 @@ in
           "microvm-tap-interfaces@${name}.service"
           "microvm-macvtap-interfaces@${name}.service"
           "microvm-pci-devices@${name}.service"
-          "microvm-virtiofsd@${name}.service"
           "microvm-set-booted@${name}.service"
         ];
         partOf = [ "microvm@${name}.service" ];
@@ -177,11 +176,6 @@ in
         path = lib.mkForce [];
         overrideStrategy = "asDropin";
       };
-      "microvm-virtiofsd@${name}" = {
-        serviceConfig.X-RestartIfChanged = [ "" microvmConfig.restartIfChanged ];
-        path = lib.mkForce [];
-        overrideStrategy = "asDropin";
-      };
     })) {
       "microvm-tap-interfaces@" = {
         description = "Setup MicroVM '%i' TAP interfaces";
@@ -230,26 +224,6 @@ in
         };
       };
 
-      "microvm-virtiofsd@" = {
-          description = "VirtioFS daemons for MicroVM '%i'";
-          before = [ "microvm@%i.service" ];
-          after = [ "local-fs.target" "microvm-set-booted@%i.service" ];
-          partOf = [ "microvm@%i.service" ];
-          unitConfig.ConditionPathExists = "${stateDir}/%i/current/bin/virtiofsd-run";
-          restartIfChanged = false;
-          serviceConfig = {
-            WorkingDirectory = "${stateDir}/%i";
-            ExecStart = "${stateDir}/%i/current/bin/virtiofsd-run";
-            LimitNOFILE = 1048576;
-            NotifyAccess = "all";
-            PrivateTmp = "yes";
-            Restart = "always";
-            RestartSec = "5s";
-            SyslogIdentifier = "microvm-virtiofsd@%i";
-            Type = "notify";
-            KillMode = "mixed";
-          };
-        };
 
       "microvm-set-booted@" = {
         description = "Save MicroVM '%i' booted configuration";
@@ -277,7 +251,6 @@ in
           "microvm-tap-interfaces@%i.service"
           "microvm-macvtap-interfaces@%i.service"
           "microvm-pci-devices@%i.service"
-          "microvm-virtiofsd@%i.service"
           "microvm-set-booted@%i.service"
         ];
         after = [
@@ -286,7 +259,6 @@ in
           "microvm-tap-interfaces@%i.service"
           "microvm-macvtap-interfaces@%i.service"
           "microvm-pci-devices@%i.service"
-          "microvm-virtiofsd@%i.service"
           "microvm-set-booted@%i.service"
         ];
         unitConfig.ConditionPathExists = "${stateDir}/%i/current/bin/microvm-run";
@@ -352,10 +324,7 @@ in
         _outdated_microvms=""
 
         for dir in ${stateDir}/*; do
-          if [ -e $dir/current/share/microvm/virtiofs ] &&
-             [ ! -e $dir/current/bin/virtiofsd-run ]; then
-            _outdated_microvms="$_outdated_microvms $(basename $dir)"
-          elif [ -e $dir/current/share/microvm/tap-interfaces ] &&
+          if [ -e $dir/current/share/microvm/tap-interfaces ] &&
              [ ! -e $dir/current/bin/tap-up ]; then
             _outdated_microvms="$_outdated_microvms $(basename $dir)"
           elif [ -e $dir/current/share/microvm/macvtap-interfaces ] &&
@@ -368,7 +337,7 @@ in
         done
 
         if [ "$_outdated_microvms" != "" ]; then
-          echo "The following MicroVMs must be updated to follow the new virtiofsd/tap/macvtap/pci setup scheme: $_outdated_microvms"
+          echo "The following MicroVMs must be updated to follow the new tap/macvtap/pci setup scheme: $_outdated_microvms"
         fi
       fi
     '';

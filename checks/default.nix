@@ -117,23 +117,6 @@ let
         };
       }) ];
     } ]
-    # rw-store
-    [ {
-      # none
-      id = null;
-    } {
-      # overlay volume
-      id = "overlay";
-      modules = [ ({ config, ... }: {
-        microvm.writableStoreOverlay = "/nix/.rw-store";
-        microvm.volumes = [ {
-          image = "nix-store-overlay.img";
-          label = "nix-store";
-          mountPoint = config.microvm.writableStoreOverlay;
-          size = 128;
-        } ];
-      }) ];
-    } ]
     # boot.systemd
     [ {
       # no

@@ -17,7 +17,6 @@ in
     ./mounts.nix
     ./interfaces.nix
     ./pci-devices.nix
-    ./virtiofsd
     ./graphics.nix
     ./rosetta.nix
     ./optimization.nix

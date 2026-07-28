@@ -39,7 +39,7 @@ writeShellScriptBin "build-microvm" ''
           mountPoint = \"/nix/.ro-store\";
         } ];
         microvm.volumes = pkgs.lib.mkForce [];
-        microvm.writableStoreOverlay = pkgs.lib.mkForce null;
+        microvm.storeOverlay = pkgs.lib.mkForce null;
         microvm.interfaces = pkgs.lib.mkForce [ {
           type = \"user\";
           id = \"n\";

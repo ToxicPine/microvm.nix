@@ -283,11 +283,15 @@ lib.warnIf (mem == 2048) ''
         "-numa" "node,memdev=mem"
         "-object" "memory-backend-memfd,id=mem,size=${toString mem}M,share=on"
       ]) ++
-      builtins.concatMap ({ proto, index, socket, source, tag, securityModel, readOnly, ... }: {
-        "virtiofs" = [
-          "-chardev" "socket,id=fs${toString index},path=${socket}"
-          "-device" "vhost-user-fs-${devType},chardev=fs${toString index},tag=${tag}"
-        ];
+      builtins.concatMap ({ proto, index, server, source, tag, securityModel, readOnly, dax, ... }: {
+        # DAX for virtio-fs never landed in QEMU: `vhost-user-fs` has no
+        # window property, only the out-of-tree virtio-fs fork does.
+        "virtiofs" = lib.throwIf (dax.mode != "never")
+          "DAX is not supported for qemu shares"
+          [
+            "-chardev" "socket,id=fs${toString index},path=${server.socket}"
+            "-device" "vhost-user-fs-${devType},chardev=fs${toString index},tag=${tag}"
+          ];
         "9p" = [
           "-fsdev" "local,id=fs${toString index},path=${source},security_model=${securityModel},readonly=${lib.boolToString readOnly}"
           "-device" "virtio-9p-${devType},fsdev=fs${toString index},mount_tag=${tag}"

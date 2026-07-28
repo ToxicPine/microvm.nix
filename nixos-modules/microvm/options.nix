@@ -379,17 +379,71 @@ in
             type = str;
             description = "Unique virtiofs daemon tag";
           };
-          socket = mkOption {
-            type = nullOr str;
-            default =
-              if config.proto == "virtiofs"
-              then "${hostName}-virtiofs-${config.tag}.sock"
-              else null;
-            description = "Socket for communication with virtiofs daemon";
+          server = {
+            socket = mkOption {
+              type = nullOr str;
+              default =
+                if config.proto == "virtiofs"
+                then "${hostName}-virtiofs-${config.tag}.sock"
+                else null;
+              description = ''
+                Socket on which this share is served.
+
+                Relative paths are resolved against the MicroVM's state
+                directory.
+              '';
+            };
+          };
+          dax = {
+            mode = mkOption {
+              type = enum [ "never" "inode" "always" ];
+              default = "never";
+              description = ''
+                DAX policy for this share. `never` copies file contents through
+                the virtio queues. `inode` lets the server select DAX per file
+                through lookup replies. `always` maps every regular file
+                through the DAX window.
+
+                Needs a hypervisor that supports DAX, a server that serves
+                mappings, and a guest kernel built with `CONFIG_FUSE_DAX`.
+                Hypervisors without it reject `inode` and `always` rather than
+                silently ignoring them. Missing server or kernel support is not
+                detectable here: mappings are declined and reads fall back to
+                being copied.
+              '';
+            };
+            window = mkOption {
+              type = nullOr ints.positive;
+              default = null;
+              description = ''
+                Size in bytes of the DAX window, for hypervisors that expect
+                the VMM to choose one.
+
+                Deliberately separate from {option}`dax.mode`, because who
+                decides the size is not uniform: `alioth` takes it on its
+                command line and requires it, while `crosvm` asks the server
+                over `GET_SHMEM_CONFIG` and rejects a value set here. Folding
+                the two together would make the size meaningless on half the
+                hypervisors that support DAX.
+
+                The window is a span of guest address space rather than
+                allocated memory, so it can be sized generously.
+              '';
+              example = literalExpression "8 * 1024 * 1024 * 1024";
+            };
           };
           source = mkOption {
-            type = nonEmptyStr;
-            description = "Path to shared directory tree";
+            type = nullOr nonEmptyStr;
+            default = null;
+            description = ''
+              Path to the shared directory tree on the host.
+
+              Required for protocols the hypervisor serves itself, which is 9p
+              and vfkit's built-in virtio-fs. A virtio-fs share reached over
+              {option}`server.socket` needs no source here: whatever is behind
+              that socket decides what it serves, and it need not be a
+              directory at all.
+            '';
           };
           securityModel = mkOption {
             type = enum [ "passthrough" "none" "mapped" "mapped-file" ];
@@ -409,25 +463,6 @@ in
             type = bool;
             description = "Turn off write access";
             default = false;
-          };
-          cache = mkOption {
-            type = enum [ "auto" "always" "metadata" "never" ];
-            description = "Virtiofs caching policy for the file system, ignored when 9p is used";
-            default = "auto";
-          };
-          posixAcl = mkOption {
-            type = bool;
-            default = true;
-            description = ''
-              Pass `--posix-acl --xattr` to virtiofsd. Disable when using
-              `--translate-uid`/`--translate-gid` (asserted to be mutually exclusive
-              with `--posix-acl`, see asserts.nix).
-            '';
-          };
-          extraArgs = mkOption {
-            type = listOf str;
-            default = [];
-            description = "Extra arguments passed to virtiofsd for this share.";
           };
         };
       }));
@@ -493,15 +528,13 @@ in
 
     vsock.cid = mkOption {
       default = null;
-      type = with types; nullOr int;
+      # AF_VSOCK context IDs are unsigned 32-bit values. 0, 1 and 2 identify
+      # the hypervisor, loopback and host respectively, while UINT32_MAX is
+      # VMADDR_CID_ANY rather than a concrete guest address.
+      type = with types; nullOr (ints.between 3 4294967294);
       description = ''
-        Virtual Machine address;
-        setting it enables AF_VSOCK
-
-        The following are reserved:
-        - 0: Hypervisor
-        - 1: Loopback
-        - 2: Host
+        Virtual machine AF_VSOCK context ID; setting it enables AF_VSOCK.
+        Values 0, 1, 2 and 4294967295 are reserved.
       '';
     };
 
@@ -559,36 +592,143 @@ in
 
     storeOnDisk = mkOption {
       type = types.bool;
-      default = ! lib.any ({ source, ... }:
-        source == "/nix/store"
-      ) config.microvm.shares;
-      description = "Whether to boot with the storeDisk, that is, unless the host's /nix/store is a microvm.share.";
+      default =
+        config.microvm.storeOverlay == null
+        && ! lib.any ({ source, ... }:
+          source == "/nix/store"
+        ) config.microvm.shares;
+      defaultText = literalExpression ''
+        config.microvm.storeOverlay == null
+        && ! lib.any ({ source, ... }: source == "/nix/store") config.microvm.shares
+      '';
+      description = ''
+        Whether to boot with the storeDisk, that is, unless the host's
+        /nix/store is a microvm.share.
+
+        Off by default with {option}`microvm.storeOverlay`, where the lower
+        layer is named explicitly and supplied by a share or volume. Enable it
+        to use the built store disk as that lower layer, in which case it is
+        mounted at {option}`microvm.storeOverlay.lowerDir` and nothing else may
+        provide that path.
+      '';
     };
 
     registerClosure = lib.mkEnableOption ''
       Register system closure's store paths in Nix db.
 
-      While enabled by default, this option may be incompatible with a persistent writable store overlay.
+      Off by default with {option}`microvm.storeOverlay`, where
+      {option}`microvm.storeOverlay.lowerStore` is already authoritative for
+      lower paths. Loading them into the guest's own database as well would
+      leave two disagreeing records of the same store.
     '' // {
-      default = config.microvm.guest.enable;
+      default = config.microvm.guest.enable && config.microvm.storeOverlay == null;
+      defaultText = literalExpression ''
+        config.microvm.guest.enable && config.microvm.storeOverlay == null
+      '';
     };
 
-    writableStoreOverlay = mkOption {
-      type = with types; nullOr str;
+    storeOverlay = mkOption {
       default = null;
-      example = "/nix/.rw-store";
-      description = ''
-        Path to the writable /nix/store overlay.
-
-        If set to a filesystem path, the initrd will mount /nix/store
-        as an overlay filesystem consisting of the read-only part as a
-        host share or from the built storeDisk, and this configuration
-        option as the writable overlay part. This allows you to build
-        nix derivations *inside* the VM.
-
-        Make sure that the path points to a writable filesystem
-        (tmpfs, volume, or share).
+      example = literalExpression ''
+        {
+          lowerDir = "/lower-store/store";
+          upperDir = "/data/upper-store";
+          workDir = "/data/work";
+          stateDir = "/data/nix-state";
+          logDir = "/data/log";
+          lowerStore = "unix:///lower-store/socket";
+          checkMount = false;
+        }
       '';
+      description = ''
+        Compose `/nix/store` as Nix's local-overlay store.
+
+        OverlayFS is mounted at `/nix/store` from the configured
+        directories, and the guest's Nix daemon is pointed at the matching
+        `local-overlay://` store, so packages can be built inside the VM
+        while sharing an immutable lower store with the host or with other
+        VMs.
+
+        Every path here must be provided by a share or a volume;
+        this option only composes them. {option}`lowerDir` and
+        {option}`lowerStore` must describe the same immutable store.
+      '';
+      type = with types; nullOr (submodule {
+        options = {
+          lowerDir = mkOption {
+            type = path;
+            description = ''
+              Read-only lower layer of the overlay, holding the immutable
+              store paths.
+            '';
+          };
+          upperDir = mkOption {
+            type = path;
+            description = "Writable upper layer receiving paths built in this VM.";
+          };
+          workDir = mkOption {
+            type = path;
+            description = ''
+              OverlayFS work directory: staging space for the copy-up of a
+              file being modified.
+
+              Required, because there is no default to fall back on and no
+              safe one to invent: the kernel needs this on the same filesystem
+              as {option}`upperDir`, and empty when the overlay is mounted.
+
+              It holds no state worth preserving. It shares a volume with
+              {option}`upperDir` because the kernel demands it, not because its
+              contents outlive a boot.
+            '';
+          };
+          stateDir = mkOption {
+            type = path;
+            description = ''
+              Nix state directory, holding `''${stateDir}/db` - the upper
+              layer's SQLite database - along with profiles and GC roots.
+
+              Required rather than left to Nix, whose default of
+              `/nix/var/nix` would put the database wherever `/nix` happens to
+              live. That is usually a tmpfs here, which would discard every
+              record of what this VM has built while leaving the paths
+              themselves in the upper layer.
+            '';
+          };
+          logDir = mkOption {
+            type = nullOr path;
+            default = null;
+            description = ''
+              Nix build log directory, or null to leave it to Nix, which
+              defaults to `/nix/var/log/nix`.
+
+              Optional because build logs are the one part of this that can be
+              lost without the store disagreeing with itself.
+            '';
+          };
+          lowerStore = mkOption {
+            type = str;
+            example = "unix:///lower-store/socket";
+            description = ''
+              Store URI serving metadata for the lower layer.
+
+              This is the authoritative source of metadata for lower paths;
+              it is not a second store that the guest writes to. It must
+              describe exactly the store mounted at {option}`lowerDir`.
+            '';
+          };
+          checkMount = mkOption {
+            type = bool;
+            default = true;
+            description = ''
+              Whether Nix should verify that `/nix/store` really is an
+              overlay of the configured layers.
+
+              Turn this off when the mount is composed in a way Nix cannot
+              recognise, such as a lower layer served over virtio-fs.
+            '';
+          };
+        };
+      });
     };
 
     graphics = {
@@ -935,54 +1075,6 @@ in
       description = ''
         Set a recognizable process name right before executing the Hyperisor.
       '';
-    };
-
-    virtiofsd.inodeFileHandles = mkOption {
-      type = with types; nullOr (enum [
-        "never" "prefer" "mandatory"
-      ]);
-      default = "prefer";
-      description = ''
-        When to use file handles to reference inodes instead of O_PATH file descriptors
-        (never, prefer, mandatory)
-
-        Allows you to overwrite default behavior in case you hit "too
-        many open files" on eg. ZFS.
-        <https://gitlab.com/virtio-fs/virtiofsd/-/issues/121>
-      '';
-    };
-
-    virtiofsd.threadPoolSize = mkOption {
-      type = with types; oneOf [ str ints.unsigned ];
-      default = "`nproc`";
-      description = ''
-        The amounts of threads virtiofsd should spawn. This option also takes the special
-        string `\`nproc\`` which spawns as many threads as the host has cores.
-      '';
-    };
-
-    virtiofsd.group = mkOption {
-      type = with types; nullOr str;
-      default = "kvm";
-      description = ''
-        The name of the group that will own the Unix domain socket file that virtiofsd creates for communication with the hypervisor.
-        If null, the socket will have group ownership of the user running the hypervisor.
-      '';
-    };
-
-    virtiofsd.extraArgs = mkOption {
-      type = with types; listOf str;
-      default = [];
-      description = ''
-        Extra command-line switch to pass to virtiofsd.
-      '';
-    };
-
-    virtiofsd.package = mkOption {
-      description = "The virtiofsd package to use.";
-      type = types.package;
-      default = cfg.vmHostPackages.virtiofsd;
-      defaultText = literalExpression ''config.microvm.vmHostPackages.virtiofsd'';
     };
 
     runner = mkOption {

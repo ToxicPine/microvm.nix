@@ -130,13 +130,15 @@ in {
       }"
     ]) (enumerate 0 volumes) ++
     lib.optionals (shares != []) (
-      builtins.concatMap ({ proto, index, socket, tag, ... }: {
-        "virtiofs" = [
-          "-chardev"
-          "socket,id=fs${toString index},path=${socket}"
-          "-device"
-          "vhost-user-fs-${devType (virtiofsOffset + index)},chardev=fs${toString index},tag=${tag},id=fs${toString index}"
-        ];
+      builtins.concatMap ({ proto, index, server, tag, dax, ... }: {
+        "virtiofs" = lib.throwIf (dax.mode != "never")
+          "DAX is not supported for stratovirt shares"
+          [
+            "-chardev"
+            "socket,id=fs${toString index},path=${server.socket}"
+            "-device"
+            "vhost-user-fs-${devType (virtiofsOffset + index)},chardev=fs${toString index},tag=${tag},id=fs${toString index}"
+          ];
       }.${proto}) (enumerate 0 shares)
     )
     ++

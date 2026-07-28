@@ -256,11 +256,13 @@ vmHostPackages.buildPackages.runCommand "microvm-${microvmConfig.hypervisor}-${h
     '') microvmConfig.interfaces}
 
 
-  ${lib.concatMapStrings ({ tag, socket, source, proto, ... }:
+  ${lib.concatMapStrings ({ tag, server, source, proto, ... }:
       lib.optionalString (proto == "virtiofs") ''
         mkdir -p $out/share/microvm/virtiofs/${tag}
-        echo "${socket}" > $out/share/microvm/virtiofs/${tag}/socket
-        echo "${source}" > $out/share/microvm/virtiofs/${tag}/source
+        echo "${server.socket}" > $out/share/microvm/virtiofs/${tag}/socket
+        ${lib.optionalString (source != null) ''
+          echo "${source}" > $out/share/microvm/virtiofs/${tag}/source
+        ''}
       ''
     ) microvmConfig.shares}
 

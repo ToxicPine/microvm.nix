@@ -245,11 +245,14 @@ in {
         ) volumes
       )
       ++
-      arg "--fs" (map ({ proto, socket, tag, ... }:
+      arg "--fs" (map ({ proto, server, tag, dax, ... }:
         if proto == "virtiofs"
-        then opsMapped {
-          inherit tag socket;
-        }
+        then lib.throwIf (dax.mode != "never")
+          "DAX is not supported for cloud-hypervisor shares"
+          (opsMapped {
+            inherit tag;
+            inherit (server) socket;
+          })
         else throw "cloud-hypervisor supports only shares that are virtiofs"
       ) shares)
       ++

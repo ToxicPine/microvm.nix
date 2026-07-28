@@ -50,10 +50,13 @@ let
     ++ (builtins.concatMap ({ image, ... }: [
       "--device" "virtio-blk,path=${image}"
     ]) volumesWithLetters)
-    ++ (builtins.concatMap ({ proto, source, tag, ... }:
-      if proto == "virtiofs" then [
-        "--device" "virtio-fs,sharedDir=${source},mountTag=${tag}"
-      ]
+    ++ (builtins.concatMap ({ proto, source, tag, dax, ... }:
+      if proto == "virtiofs" then
+        lib.throwIf (dax.mode != "never")
+          "DAX is not supported for vfkit shares"
+          [
+            "--device" "virtio-fs,sharedDir=${source},mountTag=${tag}"
+          ]
       else
         throw "vfkit does not support ${proto} share. Use proto = \"virtiofs\" instead."
     ) shares)
