@@ -50,8 +50,10 @@ in {
   command =
     if user != null
     then throw "crosvm will not change user"
-    else if initialBalloonMem != 0
-    then throw "crosvm does not support initialBalloonMem"
+    else if initialBalloonMem != 0 && !balloon
+    then throw "crosvm requires balloon = true when initialBalloonMem is non-zero"
+    else if initialBalloonMem >= mem
+    then throw "crosvm requires initialBalloonMem to be smaller than mem"
     else if hotplugMem != 0
     then throw "crosvm does not support hotplugMem"
     else if hotpluggedMem != 0
@@ -68,6 +70,10 @@ in {
       ]
       ++
       lib.optional (!balloon) "--no-balloon"
+      ++
+      lib.optionals (initialBalloonMem != 0) [
+        "--init-mem" (toString (mem - initialBalloonMem))
+      ]
       ++
       lib.optionals storeOnDisk [
         "-r" storeDisk
@@ -154,7 +160,7 @@ in {
     else throw "Cannot shutdown without socket";
 
   setBalloonScript =
-    if socket != null
+    if balloon && socket != null
     then ''
       VALUE=$(( $SIZE * 1024 * 1024 ))
       ${crosvmPkg}/bin/crosvm balloon $VALUE ${socket}
