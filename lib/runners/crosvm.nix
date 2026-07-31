@@ -107,15 +107,10 @@ in {
       builtins.concatMap ({ proto, tag, source, server, readOnly, dax, ... }: {
         # crosvm asks the server for a window over GET_SHMEM_CONFIG, so there
         # is nothing to pass and no size for a caller to choose here.
-        #
-        # Left alone, crosvm sizes the request vrings at its 32768-entry
-        # maximum, and the server allocates per-slot state to match: about
-        # 13 MiB of one-copy-per-VM memory for ring depth no filesystem
-        # workload reaches. 1024 entries is virtiofsd's own queue size.
         "virtiofs" = lib.throwIf (dax.window != null)
           "crosvm takes the DAX window size from the server, not dax.window"
           [
-            "--vhost-user" "type=fs,socket=${server.socket},max-queue-size=1024"
+            "--vhost-user" "type=fs,socket=${server.socket}"
           ];
         "9p" = if readOnly then
           throw "Readonly 9p share is not supported"
